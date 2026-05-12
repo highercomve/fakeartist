@@ -1,0 +1,15 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${SERVER_PORT}:6060"
+    networks:
+      - fakeartist-net
+    env_file:
+      - .env
+
+networks:
+  fakeartist-net:
+    driver: bridge
