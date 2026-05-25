@@ -1,16 +1,13 @@
 package storage
 
-import (
-	"errors"
-	"os"
-)
+import "errors"
 
 // Driver defines the low-level CRUD operations for storage backends
 type Driver interface {
-	Save(collection, key string, v interface{}) error
-	Load(collection, key string, v interface{}) error
+	Save(collection, key string, v any) error
+	Load(collection, key string, v any) error
 	Delete(collection, key string) error
-	Close() error // Helper for cleanup
+	Close() error
 }
 
 // NewDriver creates a storage backend driver instance
@@ -33,12 +30,4 @@ func NewDriver(driverName, path string) (Driver, error) {
 		return nil, err
 	}
 	return d, nil
-}
-
-// Ensure directory exists for file-based storage
-func ensureDir(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return os.MkdirAll(path, 0755)
-	}
-	return nil
 }

@@ -1,0 +1,30 @@
+# Build artifacts and local caches
+node_modules
+web/dist
+data
+*.log
+
+# Git + tooling
+.git
+.gitignore
+.github
+.serena
+.agents
+.claude
+.playwright-mcp
+
+# Local env / dev artifacts
+.env
+.env.local
+*.png
+*.pdf
+
+# Tests + scratch
+**/*.test.ts
+vitest.config.ts
+tsconfig.json
+P2P_PHASE*.md
+PLAN_P2P.md
+PLAN.md
+ONBOARDING.md
+README.md

@@ -21,18 +21,25 @@ First player to the configured target score wins the game.
 
 ### Key Features
 
-- **Real-time multiplayer** over WebSockets
+- **Host-authoritative P2P** over WebRTC DataChannels (host SFU model)
 - **Multi-room** support via short room codes
 - **Touch-friendly drawing**: 1 finger draws, 2 fingers pinch-zoom and pan
 - **Per-player random color** from a high-contrast palette
-- **Session persistence**: rejoin after refresh / disconnect
+- **Session persistence**: rejoin after refresh / disconnect via stroke log + checkpoint
+- **Host failover**: when the host disappears, peers elect a new host
+  deterministically and resume the game from the last broadcast state
+- **Server-relay fallback**: peers behind strict NATs that cannot
+  establish a DC fall back to the signaling WS for game traffic
 - **Anti-cheat**: pool words and the fake's identity never appear in the
-  broadcast state — they travel only over per-player direct messages
+  broadcast state — they travel only via server-DM (sealed envelopes
+  are a deferred follow-up; see `PLAN_P2P.md` §8.3)
 
 ## 🛠 Tech Stack
 
-- **Backend**: Go (Echo + Gorilla WebSocket); pluggable JSON / SQLite / Mongo storage
-- **Frontend**: React 18 SSR-rendered by Go via V8Go; bundled by ESBuild
+- **Backend**: Go (Echo + Gorilla WebSocket) for signaling, room registry,
+  role draw, checkpoints; pluggable JSON / SQLite / Mongo storage
+- **Frontend**: React 18 SSR-rendered by Go via V8Go; bundled by ESBuild;
+  `frontend/p2p/` is TypeScript (engine, replica, peer hub, transport)
 - **Styling**: Bootstrap 5
 
 ## 🚀 Run
@@ -42,6 +49,20 @@ go run cmd/server/main.go
 ```
 
 Then open <http://localhost:6060>.
+
+### Environment
+
+| Variable         | Default                        | Notes                                              |
+|------------------|--------------------------------|----------------------------------------------------|
+| `SERVER_PORT`    | `6060`                         |                                                    |
+| `STORAGE_DRIVER` | `json`                         | `json`, `sqlite`, `mongo`                          |
+| `STORAGE_PATH`   | _(driver default)_             |                                                    |
+| `P2P_ENABLED`    | `true`                         | Set `false` to skip P2P route registration in tests |
+
+Snapshot retention is hardcoded to 24h (see `internal/rooms/manager.go`).
+The client uses Google's public STUN server (`stun.l.google.com:19302`).
+Self-hosted **coturn** is a future optimization — peers behind strict
+NATs currently fall back to the signaling WS as a relay.
 
 ## 🐳 Docker
 
@@ -55,11 +76,13 @@ docker run -p 6060:6060 -v ${PWD}/data:/app/data fakeartist-server
 ```
 cmd/server          entrypoint
 internal/bundler    esbuild wrapper
-internal/server     Echo + V8 SSR
+internal/server     Echo + V8 SSR + P2P HTTP handlers
+internal/signal     WebRTC signaling hub + envelope router
+internal/rooms      room registry, role draw, checkpoint persistence
 internal/storage    json / sqlite / mongo drivers
-internal/dao        generic state save/load
-internal/game       hub, client, models, protocol, session
 frontend            React components + SSR entry
+frontend/p2p        TypeScript: engine, replica, peerHub, transport,
+                    log, checkpoint, election, crypto
 ```
 
 ## 📄 License

@@ -1,12 +1,10 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 
 	scribble "github.com/nanobox-io/golang-scribble"
-	"github.com/sergiom/fakeartist/internal/game"
 )
 
 type JSONDriver struct {
@@ -29,7 +27,7 @@ func NewJSONDriver(path string) (*JSONDriver, error) {
 	}, nil
 }
 
-func (s *JSONDriver) Save(collection, key string, v interface{}) error {
+func (s *JSONDriver) Save(collection, key string, v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -40,7 +38,7 @@ func (s *JSONDriver) Save(collection, key string, v interface{}) error {
 	return nil
 }
 
-func (s *JSONDriver) Load(collection, key string, v interface{}) error {
+func (s *JSONDriver) Load(collection, key string, v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -63,22 +61,4 @@ func (s *JSONDriver) Delete(collection, key string) error {
 }
 func (s *JSONDriver) Close() error {
 	return nil
-}
-
-// Manual LoadAll for listing? Not strictly required by interface but useful.
-func (s *JSONDriver) LoadAllGameStates() ([]*game.GameState, error) {
-	// Scribble ReadAll returns []string of json
-	records, err := s.db.ReadAll("gamestate")
-	if err != nil {
-		return nil, err
-	}
-
-	var games []*game.GameState
-	for _, r := range records {
-		var state game.GameState
-		if err := json.Unmarshal([]byte(r), &state); err == nil {
-			games = append(games, &state)
-		}
-	}
-	return games, nil
 }

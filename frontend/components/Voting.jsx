@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from './GameContext';
+import StrokeViewer from './StrokeViewer';
 
 export default function Voting() {
     const { gameState, myPlayerId, castVote } = useGame();
@@ -18,7 +19,10 @@ export default function Voting() {
     return (
         <div className="card shadow-sm">
             <div className="card-body">
-                <h3 className="text-center mb-3">Who is the Fake?</h3>
+                <h3 className="text-center mb-3">Who is the Fake Artist?</h3>
+                <div className="mb-3">
+                    <StrokeViewer />
+                </div>
                 <div className="text-center mb-3">
                     <span className="badge bg-secondary">Votes cast: {cast} / {total}</span>
                 </div>

@@ -1,29 +1,50 @@
 package server
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/sergiom/fakeartist/internal/game"
+	"github.com/sergiom/fakeartist/internal/rooms"
+	"github.com/sergiom/fakeartist/internal/signal"
 )
 
 type Server struct {
 	echo     *echo.Echo
 	renderer *Renderer
-	gm       *game.GameManager
+	cfg      Config
+	p2p      *p2pDeps // nil unless cfg.P2PEnabled
 }
 
-func New(gm *game.GameManager, renderer *Renderer) *Server {
+// New constructs the server. The legacy GameManager wiring was removed
+// in PR 10 — P2P is the only path. Callers can still pass P2PEnabled=false
+// in tests to skip route registration; the runtime default is true.
+func New(renderer *Renderer, cfg Config) *Server {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
-
 	return &Server{
 		echo:     e,
 		renderer: renderer,
-		gm:       gm,
+		cfg:      cfg,
 	}
+}
+
+// EnableP2P attaches the signaling hub + rooms manager. Must be called
+// before Start. Idempotent.
+func (s *Server) EnableP2P(store rooms.Storage) {
+	if s.p2p != nil {
+		return
+	}
+	hub := signal.NewHub()
+	go hub.Run()
+	s.p2p = &p2pDeps{
+		hub: hub,
+		mgr: rooms.NewManager(store),
+	}
+	go s.runSignalRouter()
+	log.Println("P2P: signaling hub started")
 }
 
 func (s *Server) Start(port string) error {
@@ -32,11 +53,22 @@ func (s *Server) Start(port string) error {
 	// Static Assets
 	s.echo.Static("/assets", "web/dist")
 
-	// WebSocket API
-	s.echo.GET("/api/ws", func(c echo.Context) error {
-		game.ServeWs(s.gm.Hub, c.Response().Writer, c.Request())
-		return nil
-	})
+	// P2P routes — registered when the flag is on (default true post-PR 10).
+	if s.cfg.P2PEnabled && s.p2p != nil {
+		s.echo.POST("/api/rooms", s.handleCreateRoom)
+		s.echo.GET("/api/rooms/:code", s.handleLookupRoom)
+		s.echo.POST("/api/rooms/:code/join", s.handleJoinRoom)
+		s.echo.GET("/api/signal", s.handleSignalWS)
+
+		// PR 6 — server-side role draw + reveal.
+		s.echo.POST("/api/rooms/:id/roles", s.handleDrawRoles)
+		s.echo.GET("/api/rooms/:id/reveal/:round", s.handleReveal)
+
+		// PR 7 — checkpoints + cold-boot claim-host.
+		s.echo.POST("/api/rooms/:id/snap", s.handleSaveSnap)
+		s.echo.GET("/api/rooms/:id/snap", s.handleLoadSnap)
+		s.echo.POST("/api/rooms/:id/claim-host", s.handleClaimHost)
+	}
 
 	// SSR Handler (Catch All)
 	s.echo.GET("/*", func(c echo.Context) error {
@@ -47,7 +79,7 @@ func (s *Server) Start(port string) error {
 		}
 
 		// Initial State (Empty for now, or could have Game Config)
-		initialState := map[string]interface{}{}
+		initialState := map[string]any{}
 
 		html, err := s.renderer.Render(path, initialState)
 		if err != nil {

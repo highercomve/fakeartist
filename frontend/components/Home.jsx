@@ -1,16 +1,13 @@
 import React, { useState } from 'react';
 import { useGame } from './GameContext';
 
-export default function Home({ onJoin, isConnected = false }) {
+export default function Home({ onJoin, isConnected = false, prefilledRoomCode = null }) {
     const { configureGame } = useGame();
-    const [mode, setMode] = useState('menu');
+    const [mode, setMode] = useState(prefilledRoomCode ? 'join' : 'menu');
     const [name, setName] = useState('');
-    const [roomCode, setRoomCode] = useState('');
+    const [roomCode, setRoomCode] = useState(prefilledRoomCode || '');
 
-    const handleCreate = () => {
-        setRoomCode(Math.random().toString(36).substring(2, 7).toUpperCase());
-        setMode('create_confirm');
-    };
+    const handleCreate = () => setMode('create_confirm');
 
     const handleJoinSubmit = (e) => {
         e.preventDefault();
@@ -27,7 +24,8 @@ export default function Home({ onJoin, isConnected = false }) {
             min_players:      parseInt(document.getElementById('minPlayers').value),
             turn_duration:    0,
         });
-        onJoin(name, roomCode);
+        // Create path: leave roomCode empty so the provider routes to handleCreate.
+        onJoin(name, '');
     };
 
     return (
@@ -65,7 +63,6 @@ export default function Home({ onJoin, isConnected = false }) {
             {mode === 'create_confirm' && (
                 <form onSubmit={handleCreateSubmit} className="text-start mt-3">
                     <h4 className="mb-3">Configure</h4>
-                    <div className="alert alert-info text-center">Room Code: <strong>{roomCode}</strong></div>
                     <div className="mb-3">
                         <label className="form-label">Your Name</label>
                         <input className="form-control" value={name} onChange={e => setName(e.target.value)} required />

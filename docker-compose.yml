@@ -3,12 +3,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: fakeartist:latest
+    container_name: fakeartist
+    restart: unless-stopped
     ports:
-      - "${SERVER_PORT}:6060"
+      - "${HOST_PORT:-6060}:6060"
+    environment:
+      SERVER_PORT: "6060"
+      STORAGE_DRIVER: "${STORAGE_DRIVER:-json}"
+      STORAGE_PATH: "/home/fakeartist/app/data"
+      P2P_ENABLED: "${P2P_ENABLED:-true}"
+      BUNDLE_DEV: "${BUNDLE_DEV:-false}"
+    volumes:
+      - fakeartist-data:/home/fakeartist/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:6060/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
       - fakeartist-net
-    env_file:
-      - .env
+
+volumes:
+  fakeartist-data:
 
 networks:
   fakeartist-net:

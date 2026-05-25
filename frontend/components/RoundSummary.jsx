@@ -1,5 +1,7 @@
 import React from 'react';
 import { useGame } from './GameContext';
+import StrokeViewer from './StrokeViewer';
+import { exportRoundPng } from '../p2p/exportPng';
 
 export default function RoundSummary() {
     const { gameState, myPlayerId, nextRound } = useGame();
@@ -23,6 +25,16 @@ export default function RoundSummary() {
                     <div className={`alert ${fakeWon ? 'alert-dark' : 'alert-success'} my-3`}>
                         {fakeWon ? '🎭 Fake Artist wins this round!' : '🎨 Artists win this round!'}
                     </div>
+                </div>
+
+                <div className="mb-3"><StrokeViewer /></div>
+                <div className="d-grid mb-3">
+                    <button
+                        className="btn btn-sm btn-outline-primary"
+                        onClick={() => exportRoundPng({ round: r })}
+                    >
+                        📷 Save image to share
+                    </button>
                 </div>
 
                 <div className="row g-3 mb-3">

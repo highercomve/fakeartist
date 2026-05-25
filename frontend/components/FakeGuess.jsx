@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from './GameContext';
+import StrokeViewer from './StrokeViewer';
 
 export default function FakeGuess() {
     const { gameState, myPlayerId, myRole, submitFakeGuess } = useGame();
@@ -16,6 +17,7 @@ export default function FakeGuess() {
                 <div className="card-body text-center">
                     <h3>You were caught!</h3>
                     <p className="text-muted">Last chance — guess the word the artists were drawing.</p>
+                    <div className="mb-3"><StrokeViewer /></div>
                     <form onSubmit={(e) => { e.preventDefault(); if (guess.trim()) submitFakeGuess(guess.trim()); }}>
                         <input
                             className="form-control form-control-lg text-center"
@@ -38,6 +40,7 @@ export default function FakeGuess() {
             <div className="card-body text-center">
                 <h3>The Fake was caught!</h3>
                 <p className="text-muted">Waiting for them to guess the word…</p>
+                <div className="mb-3"><StrokeViewer /></div>
                 <div className="spinner-border text-warning" role="status"></div>
             </div>
         </div>
