@@ -13,6 +13,10 @@ type BundleOptions struct {
 }
 
 func Build(opts BundleOptions) error {
+	sourcemap := api.SourceMapInline
+	if opts.IsProd {
+		sourcemap = api.SourceMapNone
+	}
 	result := api.Build(api.BuildOptions{
 		EntryPoints:       opts.EntryPoints,
 		Bundle:            true,
@@ -21,7 +25,7 @@ func Build(opts BundleOptions) error {
 		MinifyWhitespace:  opts.IsProd,
 		MinifyIdentifiers: opts.IsProd,
 		MinifySyntax:      opts.IsProd,
-		Sourcemap:         api.SourceMapInline,
+		Sourcemap:         sourcemap,
 		Loader: map[string]api.Loader{
 			".js":  api.LoaderJSX,
 			".jsx": api.LoaderJSX,
