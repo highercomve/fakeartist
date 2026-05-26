@@ -410,11 +410,12 @@ export default function P2pGameProvider() {
             },
         });
 
-        // T9.2: 10s ICE timeout — if the DC hasn't opened by then,
-        // fall back to a RelayTransport over the signaling WS. We
-        // hold the timer here so peerHub.onPeerOpen can cancel it.
+        // T9.2: ICE timeout — if the DC hasn't opened, fall back to a
+        // RelayTransport over the signaling WS. Cellular NAT (esp. iOS)
+        // makes STUN-only ICE fail reliably, so we don't wait long.
         let iceTimeoutHandle = setTimeout(() => {
             if (r.transport) return; // DC opened in time
+            console.log('[p2p] ICE timeout, falling back to server relay');
             // Fall back. The relay transport sends RELAY-wrapped
             // envelopes addressed to the host.
             const relay = new RelayTransport({
@@ -430,8 +431,9 @@ export default function P2pGameProvider() {
             // Kick a SYNC_REQ — though without a hostDc, the replica's
             // requestSync hook will be a no-op. Instead the host will
             // emit STATE_UPDATE on next change and the replica picks up.
-            setErrorMsg('Using server relay (P2P unavailable)');
-        }, 10000);
+            setErrorMsg('Connecting via server (slower mode)');
+            setTimeout(() => setErrorMsg(null), 3000);
+        }, 4000);
         r.unsub.push(() => clearTimeout(iceTimeoutHandle));
 
         // Guests wait for the host to initiate the offer.
@@ -443,11 +445,14 @@ export default function P2pGameProvider() {
                 // the failover.
                 if (env.player_id === r.hostId) cancelFailover();
             } else if (env.type === 'SDP_OFFER') {
-                await peerHub.acceptOffer(env.from, env.sdp);
+                try { await peerHub.acceptOffer(env.from, env.sdp); }
+                catch (e) { console.error('[p2p] acceptOffer failed:', e); }
             } else if (env.type === 'SDP_ANSWER') {
-                await peerHub.addRemoteAnswer(env.from, env.sdp);
+                try { await peerHub.addRemoteAnswer(env.from, env.sdp); }
+                catch (e) { console.error('[p2p] addRemoteAnswer failed:', e); }
             } else if (env.type === 'ICE') {
-                await peerHub.addRemoteIce(env.from, env.candidate);
+                try { await peerHub.addRemoteIce(env.from, env.candidate); }
+                catch (e) { console.error('[p2p] addRemoteIce failed:', e); }
             } else if (env.type === 'YOUR_ROLE') {
                 replica.apply({ type: 'YOUR_ROLE', payload: env.payload });
             } else if (env.type === 'RELAY') {
@@ -457,6 +462,8 @@ export default function P2pGameProvider() {
                 // be sending both relay and DC at the same time).
                 if (r.transport && r.transport instanceof RelayTransport) {
                     r.transport.handleRelayIn(env.envelope);
+                } else {
+                    console.warn('[p2p] dropped RELAY frame: no relay transport active');
                 }
             } else if (env.type === 'PEER_LEFT') {
                 r.connected.delete(env.player_id);

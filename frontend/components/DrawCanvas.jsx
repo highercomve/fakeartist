@@ -230,20 +230,29 @@ export default function DrawCanvas() {
         }
     };
 
-    const handleWheel = (e) => {
-        e.preventDefault();
-        const factor = Math.exp(-e.deltaY * 0.001);
-        const start = viewRef.current;
-        const newScale = clampScale(start.scale * factor);
-        const rect = canvasRef.current.getBoundingClientRect();
-        const localX = e.clientX - rect.left;
-        const localY = e.clientY - rect.top;
-        const worldX = (localX - start.tx) / start.scale;
-        const worldY = (localY - start.ty) / start.scale;
-        const newTx = localX - worldX * newScale;
-        const newTy = localY - worldY * newScale;
-        setView({ scale: newScale, tx: newTx, ty: newTy });
-    };
+    // React 17+ attaches onWheel as a passive listener, so e.preventDefault()
+    // is silently ignored — Mac trackpads would scroll the page instead of
+    // zooming the canvas. Bind natively with {passive: false}.
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const onWheel = (e) => {
+            e.preventDefault();
+            const factor = Math.exp(-e.deltaY * 0.001);
+            const start = viewRef.current;
+            const newScale = clampScale(start.scale * factor);
+            const rect = canvas.getBoundingClientRect();
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
+            const worldX = (localX - start.tx) / start.scale;
+            const worldY = (localY - start.ty) / start.scale;
+            const newTx = localX - worldX * newScale;
+            const newTy = localY - worldY * newScale;
+            setView({ scale: newScale, tx: newTx, ty: newTy });
+        };
+        canvas.addEventListener('wheel', onWheel, { passive: false });
+        return () => canvas.removeEventListener('wheel', onWheel);
+    }, []);
 
     const resetView = () => setView({ scale: 1, tx: 0, ty: 0 });
 
@@ -291,7 +300,6 @@ export default function DrawCanvas() {
                         onPointerUp={finishPointer}
                         onPointerCancel={finishPointer}
                         onPointerLeave={finishPointer}
-                        onWheel={handleWheel}
                         style={{display:'block', touchAction:'none', cursor: isMyTurn ? 'crosshair' : 'default'}}
                     />
                 </div>

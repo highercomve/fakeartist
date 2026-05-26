@@ -23,6 +23,12 @@ if (typeof globalThis !== 'undefined') {
     <style>
       html, body { overscroll-behavior: none; }
       .canvas-wrap { touch-action: none; }
+      /* Suppress the gray tap-highlight rectangle on iOS Safari. */
+      * { -webkit-tap-highlight-color: transparent; }
+      /* iOS Safari sometimes auto-zooms when focusing an input whose
+         computed font-size is < 16px; Bootstrap's defaults are >= 16px
+         but inputs inside .input-group-sm drop to 14px. Pin them. */
+      .form-control, .form-select { font-size: 16px; }
     </style>
 </head>
 <body class="bg-light">
