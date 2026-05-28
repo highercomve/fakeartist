@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log"
 	"net/http"
 
@@ -39,11 +40,33 @@ func (s *Server) EnableP2P(store rooms.Storage) {
 	}
 	hub := signal.NewHub()
 	go hub.Run()
+	mgr := rooms.NewManager(store)
+	if s.cfg.GCIdleTTL > 0 {
+		mgr.IdleTTL = s.cfg.GCIdleTTL
+	}
+	if s.cfg.GCFinishedGrace > 0 {
+		mgr.FinishedGrace = s.cfg.GCFinishedGrace
+	}
+	if s.cfg.GCSweepInterval > 0 {
+		mgr.SweepInterval = s.cfg.GCSweepInterval
+	}
+	// When a room is reaped, close any still-open WS sessions so the
+	// hub doesn't carry orphaned per-connection buffers/goroutines.
+	// Non-blocking send: if the hub's CloseRoom buffer is full, the
+	// next sweep tick will retry — better than stalling the sweeper.
+	mgr.OnRoomDeleted = func(roomID string) {
+		select {
+		case hub.CloseRoom <- roomID:
+		default:
+			log.Printf("P2P: CloseRoom buffer full, dropped close for %s", roomID)
+		}
+	}
 	s.p2p = &p2pDeps{
 		hub: hub,
-		mgr: rooms.NewManager(store),
+		mgr: mgr,
 	}
 	go s.runSignalRouter()
+	go mgr.StartGC(context.Background())
 	log.Println("P2P: signaling hub started")
 }
 

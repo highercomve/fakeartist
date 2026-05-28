@@ -260,7 +260,31 @@ func (s *Server) handleSaveSnap(c echo.Context) error {
 	if err := s.p2p.mgr.SaveCheckpoint(context.Background(), roomID, cp); err != nil {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	}
+	// Peek the snapshot's status enum so the GC can apply the short
+	// grace window once the game ends — and unset it on play-again
+	// (status flips back to LOBBY) so a fresh game isn't reaped early.
+	// Peek failures are non-fatal: the snapshot is already saved, and
+	// the room will still be evicted by the idle TTL if status drift
+	// leaves FinishedAt stale.
+	_ = s.p2p.mgr.SetFinished(roomID, peekGameOver(req.State))
 	return c.NoContent(http.StatusNoContent)
+}
+
+// peekGameOver does the minimum decode needed to spot a terminal state
+// in the snapshot blob. We intentionally don't share the frontend's
+// full GameState type — only the `status` enum is load-bearing here
+// and treating the blob as opaque elsewhere keeps the coupling small.
+func peekGameOver(state json.RawMessage) bool {
+	if len(state) == 0 {
+		return false
+	}
+	var peek struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(state, &peek); err != nil {
+		return false
+	}
+	return peek.Status == "GAME_OVER"
 }
 
 func (s *Server) handleLoadSnap(c echo.Context) error {

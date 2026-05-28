@@ -14,6 +14,12 @@ services:
       STORAGE_PATH: "/home/fakeartist/app/data"
       P2P_ENABLED: "${P2P_ENABLED:-true}"
       BUNDLE_DEV: "${BUNDLE_DEV:-false}"
+      # Empty defaults → rooms.Manager built-ins (10m / 1m / 1m). Set
+      # any of these (e.g. GC_IDLE_TTL=3s) to shrink the GC windows
+      # for E2E tests without rebuilding the image.
+      GC_IDLE_TTL: "${GC_IDLE_TTL:-}"
+      GC_FINISHED_GRACE: "${GC_FINISHED_GRACE:-}"
+      GC_SWEEP_INTERVAL: "${GC_SWEEP_INTERVAL:-}"
     volumes:
       - fakeartist-data:/home/fakeartist/app/data
     healthcheck:

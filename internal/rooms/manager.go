@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"sync"
 	"time"
@@ -22,9 +23,16 @@ type Storage interface {
 const (
 	checkpointsCollection = "p2p_checkpoints"
 
-	roomCodeLength    = 4
-	roomCodeAttempts  = 50
-	roomCodeAlphabet  = "ABCDEFGHIJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1 to reduce typo confusion
+	roomCodeLength   = 4
+	roomCodeAttempts = 50
+	roomCodeAlphabet = "ABCDEFGHIJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1 to reduce typo confusion
+
+	// Defaults mirror papelito's GC: rooms idle for 10 min are dropped,
+	// and rooms tagged finished get a 1-min grace window. The sweep
+	// itself runs once a minute.
+	defaultIdleTTL       = 10 * time.Minute
+	defaultFinishedGrace = 1 * time.Minute
+	defaultSweepInterval = 1 * time.Minute
 )
 
 // ErrRoomCodeExhausted is returned when we fail to mint a unique 4-char
@@ -41,17 +49,33 @@ var ErrRoomNotFound = errors.New("room not found")
 // short-lived metadata (code -> id, host, players); a server restart
 // drops live rooms but checkpoints survive in storage.
 type Manager struct {
-	mu      sync.RWMutex
-	store   Storage
-	byID    map[string]*Room
-	byCode  map[string]string // code -> id
+	mu     sync.RWMutex
+	store  Storage
+	byID   map[string]*Room
+	byCode map[string]string // code -> id
+
+	// GC knobs — public so tests and callers can shrink them. Read
+	// without the lock; only mutate before StartGC begins.
+	IdleTTL       time.Duration
+	FinishedGrace time.Duration
+	SweepInterval time.Duration
+
+	// OnRoomDeleted, when set, is invoked once per room evicted by
+	// DeleteRoom or SweepOnce. The hook is called outside the Manager
+	// lock so the callee may synchronously dispatch to channels or
+	// take other locks. Kept as a hook (not a direct hub dependency)
+	// so the rooms package doesn't import signal.
+	OnRoomDeleted func(roomID string)
 }
 
 func NewManager(store Storage) *Manager {
 	return &Manager{
-		store:  store,
-		byID:   make(map[string]*Room),
-		byCode: make(map[string]string),
+		store:         store,
+		byID:          make(map[string]*Room),
+		byCode:        make(map[string]string),
+		IdleTTL:       defaultIdleTTL,
+		FinishedGrace: defaultFinishedGrace,
+		SweepInterval: defaultSweepInterval,
 	}
 }
 
@@ -270,12 +294,84 @@ func tupleBeats(vA, sA int, pA string, vB, sB int, pB string) bool {
 // its checkpoint. Used by the cleanup pass.
 func (m *Manager) DeleteRoom(roomID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if room, ok := m.byID[roomID]; ok {
-		delete(m.byCode, room.Code)
+	_, existed := m.byID[roomID]
+	if existed {
+		delete(m.byCode, m.byID[roomID].Code)
 		delete(m.byID, roomID)
 	}
+	m.mu.Unlock()
 	_ = m.store.Delete(checkpointsCollection, roomID)
+	if existed && m.OnRoomDeleted != nil {
+		m.OnRoomDeleted(roomID)
+	}
+}
+
+// SetFinished tags or untags a room as game-over so the GC sweep can
+// apply the short-grace branch. The untag path matters for play-again:
+// when status flips back to LOBBY the room must lose its grace window
+// or the next sweep would evict a fresh game. Bumps UpdatedAt either
+// way so activity is recorded.
+func (m *Manager) SetFinished(roomID string, finished bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	room, ok := m.byID[roomID]
+	if !ok {
+		return ErrRoomNotFound
+	}
+	now := time.Now().UTC()
+	if finished {
+		room.FinishedAt = &now
+	} else {
+		room.FinishedAt = nil
+	}
+	room.UpdatedAt = now
+	return nil
+}
+
+// StartGC runs the sweeper on SweepInterval ticks until ctx is done.
+// Intended to be called as `go mgr.StartGC(ctx)`.
+func (m *Manager) StartGC(ctx context.Context) {
+	t := time.NewTicker(m.SweepInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.SweepOnce(time.Now().UTC())
+		}
+	}
+}
+
+// SweepOnce evicts every room whose UpdatedAt predates the idle TTL,
+// or — if FinishedAt is set — predates the finished grace. Storage
+// deletion happens after the lock is released so a slow backing store
+// can't stall request handlers. Returns the deleted room IDs (handy
+// for tests, logging, and a future ops endpoint that triggers an
+// immediate sweep).
+func (m *Manager) SweepOnce(now time.Time) []string {
+	m.mu.Lock()
+	var deleted []string
+	for id, room := range m.byID {
+		idle := now.Sub(room.UpdatedAt)
+		if idle <= m.IdleTTL && (room.FinishedAt == nil || idle <= m.FinishedGrace) {
+			continue
+		}
+		delete(m.byCode, room.Code)
+		delete(m.byID, id)
+		deleted = append(deleted, id)
+	}
+	m.mu.Unlock()
+
+	for _, id := range deleted {
+		if err := m.store.Delete(checkpointsCollection, id); err != nil {
+			log.Printf("rooms GC: drop checkpoint %s: %v", id, err)
+		}
+		if m.OnRoomDeleted != nil {
+			m.OnRoomDeleted(id)
+		}
+	}
+	return deleted
 }
 
 // ---- helpers ----

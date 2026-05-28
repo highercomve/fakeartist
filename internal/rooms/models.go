@@ -30,6 +30,12 @@ type Room struct {
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 
+	// FinishedAt, when non-nil, marks the room as game-over. The GC
+	// sweep uses it to apply a short grace window (FinishedGrace) on
+	// top of the idle predicate so completed rooms get reaped sooner
+	// than merely-idle ones.
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+
 	// Draw holds the server-side pool + round secrets used by the role
 	// assignment endpoints (PR 6). nil until the host first calls /roles.
 	// Not serialized — secrets must never leak through Room JSON.

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -468,6 +469,178 @@ func TestSignalingRelayForwards(t *testing.T) {
 	}
 	if string(got.Envelope) != string(inner) {
 		t.Fatalf("envelope not forwarded verbatim:\n  want: %s\n  got:  %s", string(inner), string(got.Envelope))
+	}
+}
+
+// snapBody constructs a /snap POST body for a host pushing `status`
+// as the only meaningful field in the State blob.
+func snapBody(hostID string, version int, status string) []byte {
+	payload := map[string]any{
+		"player_id":            hostID,
+		"version":              version,
+		"state":                map[string]string{"status": status},
+		"log_tail_from_index":  0,
+		"log_tail":             []any{},
+	}
+	b, _ := json.Marshal(payload)
+	return b
+}
+
+func TestSnapStatusFlipsFinishedAndGCEvicts(t *testing.T) {
+	hs, s := newTestServer(t)
+
+	resp, err := http.Post(hs.URL+"/api/rooms", "application/json",
+		strings.NewReader(`{"player_name":"Host"}`))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer resp.Body.Close()
+	var created createRoomRes
+	json.NewDecoder(resp.Body).Decode(&created)
+
+	// Push a GAME_OVER snapshot — server should peek `status` and tag
+	// the room as finished automatically.
+	snap, err := http.Post(hs.URL+"/api/rooms/"+created.RoomID+"/snap",
+		"application/json", bytes.NewReader(snapBody(created.PlayerID, 1, "GAME_OVER")))
+	if err != nil {
+		t.Fatalf("snap: %v", err)
+	}
+	snap.Body.Close()
+	if snap.StatusCode != http.StatusNoContent {
+		t.Fatalf("snap status: %d", snap.StatusCode)
+	}
+
+	room, err := s.p2p.mgr.LookupByID(created.RoomID)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if room.FinishedAt == nil {
+		t.Fatal("FinishedAt should be set after GAME_OVER snap")
+	}
+
+	// Drive the sweeper with tight TTLs: backdate UpdatedAt past the
+	// (shrunken) FinishedGrace and confirm both in-memory and storage
+	// state are wiped.
+	s.p2p.mgr.IdleTTL = 1 * time.Hour    // ensure only the finished branch can match
+	s.p2p.mgr.FinishedGrace = 1 * time.Millisecond
+	room.UpdatedAt = time.Now().UTC().Add(-1 * time.Second)
+	finishedAt := time.Now().UTC().Add(-1 * time.Second)
+	room.FinishedAt = &finishedAt
+
+	deleted := s.p2p.mgr.SweepOnce(time.Now().UTC())
+	if len(deleted) != 1 || deleted[0] != created.RoomID {
+		t.Fatalf("expected room %s to be swept, got %v", created.RoomID, deleted)
+	}
+	if _, err := s.p2p.mgr.LookupByID(created.RoomID); err == nil {
+		t.Fatal("room should be gone from manager after sweep")
+	}
+	if _, err := s.p2p.mgr.LoadCheckpoint(context.Background(), created.RoomID); err == nil {
+		t.Fatal("checkpoint should be deleted from storage after sweep")
+	}
+}
+
+func TestSnapClearsFinishedOnPlayAgain(t *testing.T) {
+	hs, s := newTestServer(t)
+
+	resp, err := http.Post(hs.URL+"/api/rooms", "application/json",
+		strings.NewReader(`{"player_name":"Host"}`))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer resp.Body.Close()
+	var created createRoomRes
+	json.NewDecoder(resp.Body).Decode(&created)
+
+	// First snap: GAME_OVER tags the room.
+	r1, err := http.Post(hs.URL+"/api/rooms/"+created.RoomID+"/snap",
+		"application/json", bytes.NewReader(snapBody(created.PlayerID, 1, "GAME_OVER")))
+	if err != nil {
+		t.Fatalf("snap GAME_OVER: %v", err)
+	}
+	r1.Body.Close()
+	if room, _ := s.p2p.mgr.LookupByID(created.RoomID); room.FinishedAt == nil {
+		t.Fatal("FinishedAt should be set after GAME_OVER snap")
+	}
+
+	// Play-again: a later snap with a non-terminal status must clear
+	// FinishedAt — otherwise the GC's short-grace branch would reap a
+	// fresh game.
+	r2, err := http.Post(hs.URL+"/api/rooms/"+created.RoomID+"/snap",
+		"application/json", bytes.NewReader(snapBody(created.PlayerID, 2, "LOBBY")))
+	if err != nil {
+		t.Fatalf("snap LOBBY: %v", err)
+	}
+	r2.Body.Close()
+	room, _ := s.p2p.mgr.LookupByID(created.RoomID)
+	if room.FinishedAt != nil {
+		t.Fatal("FinishedAt should be cleared after LOBBY snap")
+	}
+
+	// Sweep with the same aggressive grace as the previous test — the
+	// untagged room must survive.
+	s.p2p.mgr.IdleTTL = 1 * time.Hour
+	s.p2p.mgr.FinishedGrace = 1 * time.Millisecond
+	if deleted := s.p2p.mgr.SweepOnce(time.Now().UTC()); len(deleted) != 0 {
+		t.Fatalf("untagged room should not be swept, got %v", deleted)
+	}
+}
+
+func TestSweepDisconnectsSignalClients(t *testing.T) {
+	hs, s := newTestServer(t)
+
+	resp, err := http.Post(hs.URL+"/api/rooms", "application/json",
+		strings.NewReader(`{"player_name":"Host"}`))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer resp.Body.Close()
+	var created createRoomRes
+	json.NewDecoder(resp.Body).Decode(&created)
+
+	conn := dialSignal(t, hs, created.RoomID, created.PlayerID)
+	defer conn.Close()
+
+	// Give the hub a moment to finish BindRoom before sweeping —
+	// otherwise CloseRoom can race a not-yet-registered client.
+	time.Sleep(50 * time.Millisecond)
+
+	// Backdate the room so any predicate matches, then drive the sweep.
+	room, err := s.p2p.mgr.LookupByID(created.RoomID)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	room.UpdatedAt = time.Now().UTC().Add(-1 * time.Hour)
+	s.p2p.mgr.IdleTTL = 1 * time.Millisecond
+	if deleted := s.p2p.mgr.SweepOnce(time.Now().UTC()); len(deleted) != 1 {
+		t.Fatalf("expected 1 eviction, got %v", deleted)
+	}
+
+	// The hub processes CloseRoom asynchronously and the close frame
+	// travels through the per-client write pump (which flushes any
+	// buffered messages first — gorilla wraps FormatCloseMessage in a
+	// TextMessage before the real Close frame). Loop until we either
+	// see a close error (pass) or hit the deadline (fail — conn stayed
+	// open). A read timeout is treated as a failure: it means the
+	// server never closed us.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var lastErr error
+	for {
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			continue // drain the buffered close-frame payload, keep reading
+		}
+		lastErr = err
+		break
+	}
+	if lastErr == nil {
+		t.Fatal("never observed a read error — conn loop exited unexpectedly")
+	}
+	// A pure read-timeout (i/o deadline) is NOT acceptable — it would
+	// mean the server held the conn open past the sweep. Any websocket
+	// close (normal, going-away, no-status) is fine.
+	var ce *websocket.CloseError
+	if !errors.As(lastErr, &ce) {
+		t.Fatalf("expected websocket close error, got %v", lastErr)
 	}
 }
 

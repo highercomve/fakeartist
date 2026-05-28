@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/sergiom/fakeartist/internal/bundler"
 	"github.com/sergiom/fakeartist/internal/server"
@@ -48,9 +49,13 @@ func main() {
 	cfg := server.Config{
 		// P2P_ENABLED defaults to true post-PR 10 (T10.2). Set to "false"
 		// only in tests or to roll back the migration.
-		P2PEnabled: parseBool(os.Getenv("P2P_ENABLED"), true),
+		P2PEnabled:      parseBool(os.Getenv("P2P_ENABLED"), true),
+		GCIdleTTL:       parseDuration(os.Getenv("GC_IDLE_TTL"), 10*time.Minute),
+		GCFinishedGrace: parseDuration(os.Getenv("GC_FINISHED_GRACE"), 1*time.Minute),
+		GCSweepInterval: parseDuration(os.Getenv("GC_SWEEP_INTERVAL"), 1*time.Minute),
 	}
-	log.Printf("Config: P2P_ENABLED=%t", cfg.P2PEnabled)
+	log.Printf("Config: P2P_ENABLED=%t GC_IDLE_TTL=%s GC_FINISHED_GRACE=%s GC_SWEEP_INTERVAL=%s",
+		cfg.P2PEnabled, cfg.GCIdleTTL, cfg.GCFinishedGrace, cfg.GCSweepInterval)
 
 	srv := server.New(renderer, cfg)
 	if cfg.P2PEnabled {
@@ -71,4 +76,16 @@ func parseBool(s string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func parseDuration(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		log.Printf("invalid duration %q, using default %s", s, def)
+		return def
+	}
+	return d
 }
