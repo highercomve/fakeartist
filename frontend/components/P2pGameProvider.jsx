@@ -100,6 +100,8 @@ export default function P2pGameProvider() {
         connected: new Set(),
         // Grace timer handle (failover). null when no host-death pending.
         failoverTimer: null,
+        // Pending configuration applied once transport is ready.
+        pendingConfig: null,
         // listeners we'll need to clean up.
         unsub: [],
     });
@@ -365,8 +367,14 @@ export default function P2pGameProvider() {
         r.checkpoint = checkpoint;
         setMode('host');
 
-        // Auto-join the engine as the host player.
+        // Auto-join the engine as the host player. JOIN must precede
+        // CONFIGURE — handleConfigure gates on requireHost, which only
+        // passes once state.host_id is set by the first JOIN.
         transport.send({ type: 'JOIN_GAME', payload: { id: playerId, player_name: localStorage.getItem('fakeartist_name') || 'Host' } });
+        if (r.pendingConfig) {
+            transport.send({ type: 'CONFIGURE_GAME', payload: r.pendingConfig });
+            r.pendingConfig = null;
+        }
 
         // On promotion (keepSignaling=true) the new host already has a
         // set of `connected` peers from its prior guest-mode signaling
@@ -587,7 +595,10 @@ export default function P2pGameProvider() {
 
     const sendCmd = (type, payload = {}) => {
         const r = refs.current;
-        if (!r.transport) return;
+        if (!r.transport) {
+            if (type === 'CONFIGURE_GAME') r.pendingConfig = payload;
+            return;
+        }
         r.transport.send({ type, payload });
     };
 
